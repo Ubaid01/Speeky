@@ -35,3 +35,10 @@ requests==2.31.0
 
 # Utilities
 scipy==1.11.4
+
+Do some research on pipecat, and livekit
+ 
+also realtime models, GPT and Gemini
+ 
+RAG as a tool
+ 
