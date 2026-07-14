@@ -1,12 +1,4 @@
-import type { ErrorRequestHandler } from "express";
-
-interface AppError extends Error {
-  statusCode?: number;
-  status?: "fail" | "error";
-  isOperational?: boolean;
-}
-
-export const errorHandler: ErrorRequestHandler = (err: AppError, req, res, _next) => {
+export const errorHandler = (err, req, res, _next) => {
   console.error({
     message: err.message,
     stack: err.stack,
