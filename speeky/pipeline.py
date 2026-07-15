@@ -52,6 +52,14 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Context types treated as high-stakes/professional for US-21's E-02
+# (Professional Context Violation). ASSUMPTION: pipeline.py's docstring
+# only documents context_type values as (hr, technical, functional,
+# general) with no further definition of what each represents. This set
+# is a best-effort mapping and should be confirmed with whoever owns the
+# context_type semantics.
+HIGH_STAKES_CONTEXT_TYPES = {"hr", "technical", "functional"}
+
 
 class SpeekyPipeline:
     """
@@ -96,6 +104,7 @@ class SpeekyPipeline:
         self.fluency_analyzer = None
         self.conversation_engine = None
         self.tts = None
+        self.confidence_analyzer = None
         
         # Confidence score engine
         self.confidence_engine = confidence_engine or ConfidenceScoreEngine()
@@ -157,12 +166,17 @@ class SpeekyPipeline:
             except Exception as e:
                 logger.error(f"Failed to load conversation engine: {e}")
         
-        if TextToSpeech:
-            try:
-                self.tts = TextToSpeech(voice=self.tts_voice)
-                logger.info("TTS loaded")
-            except Exception as e:
-                logger.error(f"Failed to load TTS: {e}")
+        try:
+            self.tts = TextToSpeech(voice=self.tts_voice)
+            logger.info("TTS loaded")
+        except Exception as e:
+            logger.error(f"Failed to load TTS: {e}")
+
+        try:
+            self.confidence_analyzer = ConfidenceGrammarAnalyzer()
+            logger.info("Confidence/grammar analyzer loaded")
+        except Exception as e:
+            logger.error(f"Failed to load confidence/grammar analyzer: {e}")
         
         logger.info("All components loaded")
     
@@ -185,6 +199,8 @@ class SpeekyPipeline:
                 self.conversation_engine = ConversationEngine(ollama_url=self.ollama_url)
             elif component_name == "tts" and self.tts is None and TextToSpeech:
                 self.tts = TextToSpeech(voice=self.tts_voice)
+            elif component_name == "confidence" and self.confidence_analyzer is None:
+                self.confidence_analyzer = ConfidenceGrammarAnalyzer()
     
     def process(
         self,
@@ -207,6 +223,27 @@ class SpeekyPipeline:
         Returns:
             Dictionary with complete analysis results
         """
+        logger.info("Starting pipeline processing...")
+        
+        # Create output directory if needed
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Initialize result dictionary
+        result = {
+            'timestamp': datetime.now().isoformat(),
+            'context_type': context_type,
+            'original_text': '',
+            'corrected_text': '',
+            'pronunciation_score': 0.0,
+            'fluency_score': 0.0,
+            'grammar_errors': {},
+            'explanation': '',
+            'response_text': '',
+            'audio_filename': '',
+            'confidence_analysis': {},
+            'errors': []
+        }
+        
         try:
             logger.info("Starting pipeline processing...")
             
@@ -343,6 +380,20 @@ class SpeekyPipeline:
             else:
                 result['errors'].append("Grammar corrector not available")
                 result['corrected_text'] = result['original_text']
+                grammar_result = {}
+
+            # Step 6.5: Confidence vs. Grammar analysis (US-21)
+            # Reuses fluency_result (step 5) and grammar_result (step 6) —
+            # no new signal extraction, just scoring/feedback on top.
+            self._ensure_component("confidence")
+            if self.confidence_analyzer:
+                is_high_stakes = context_type in HIGH_STAKES_CONTEXT_TYPES
+                confidence_analysis = self.confidence_analyzer.analyze(
+                    fluency_result, grammar_result, is_high_stakes_context=is_high_stakes
+                )
+                result['confidence_analysis'] = confidence_analysis
+            else:
+                result['errors'].append("Confidence/grammar analyzer not available")
             
             # Step 7: Conversational response
             self._ensure_component("conversation")
@@ -451,6 +502,7 @@ class SpeekyPipeline:
             'fluency': self.fluency_analyzer is not None,
             'conversation': self.conversation_engine is not None,
             'tts': self.tts is not None,
+            'confidence': self.confidence_analyzer is not None,
             'ollama_available': self.conversation_engine.ollama_available if self.conversation_engine else False
         }
     

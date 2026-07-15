@@ -44,11 +44,12 @@ from .reassessment import PeriodicReAssessment
 
 __all__ = [
     "VoiceActivityDetector",
-    "AutomaticSpeechRecognition", 
+    "AutomaticSpeechRecognition",
     "WordAligner",
     "PronunciationScorer",
     "GrammarCorrector",
     "FluencyAnalyzer",
+    "ConfidenceGrammarAnalyzer",
     "ConversationEngine",
     "TextToSpeech",
     "SpeekyPipeline",
