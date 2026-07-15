@@ -9,6 +9,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+
 from lib.prisma_client import db
 from middlewares.error_handler import (
     AuthError,
@@ -18,6 +23,7 @@ from middlewares.error_handler import (
     validation_error_handler,
 )
 from routers.auth_routes import router as auth_router
+from routers.user_routes import router as user_router
 from utils.app_error import AppError
 
 
@@ -27,9 +33,16 @@ async def lifespan(_app: FastAPI):
     yield
     await db.disconnect()
 
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["100/minute"],  # Global limit
+)
 
 app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
 
+
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[os.environ.get("CLIENT_ORIGIN", "http://localhost:5173")],
@@ -39,6 +52,10 @@ app.add_middleware(
 
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(AuthError, auth_error_handler)
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler,  # type: ignore[arg-type]
+)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
@@ -49,10 +66,10 @@ async def health():
 
 
 app.include_router(auth_router, prefix="/api/auth")
+app.include_router(user_router, prefix="/api/users")
 
 
 # Port of app.js's `app.all("/{*path}", ...)` catch-all 404 — must stay the LAST
-# route registered, same as Express (route order = match order in both frameworks).
 @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
 async def not_found(full_path: str, request: Request):
     raise AppError(f"Route not found: {request.url.path}", 404)

@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from lib.prisma_client import db
-from middlewares.auth_middleware import require_auth
 from schemas.auth_schemas import ForgotSchema, LoginSchema, ResetSchema, SignupSchema
 from utils.email_utils import send_password_reset_email
 from utils.jwt_utils import (
@@ -66,7 +65,7 @@ async def signup(payload: SignupSchema, response: Response):
 
     await _issue_tokens(response, user.id)
     response.status_code = 201
-    return {"user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role}}
 
 
 async def login(payload: LoginSchema, response: Response):
@@ -85,7 +84,7 @@ async def login(payload: LoginSchema, response: Response):
         return JSONResponse(status_code=401, content={"error": "Invalid credentials"})
 
     await _issue_tokens(response, user.id)
-    return {"user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role}}
 
 
 async def refresh(request: Request, response: Response):
@@ -117,7 +116,7 @@ async def refresh(request: Request, response: Response):
     await db.refreshtoken.update(where={"id": stored.id}, data={"revoked": True})
 
     await _issue_tokens(response, user.id)
-    return {"user": {"id": user.id, "email": user.email, "name": user.name}}
+    return {"user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role}}
 
 
 async def logout(request: Request):
@@ -136,20 +135,6 @@ async def logout(request: Request):
     resp.delete_cookie("access_token", path=access_opts["path"], samesite=access_opts["samesite"])
     resp.delete_cookie("refresh_token", path=refresh_opts["path"], samesite=refresh_opts["samesite"])
     return resp
-
-
-async def me(user_id: str = Depends(require_auth)):
-    user = await db.user.find_unique(where={"id": user_id})
-    if not user:
-        return JSONResponse(status_code=404, content={"error": "User not found"})
-    return {
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "name": user.name,
-            "createdAt": user.createdAt.isoformat(),
-        }
-    }
 
 
 async def forgot_password(payload: ForgotSchema):
