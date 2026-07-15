@@ -15,17 +15,19 @@ from .alignment import WordAligner
 from .pronunciation import PronunciationScorer
 from .grammar import GrammarCorrector
 from .fluency import FluencyAnalyzer
+from .confidence import ConfidenceGrammarAnalyzer
 from .response import ConversationEngine
 from .tts import TextToSpeech
 from .pipeline import SpeekyPipeline
 
 __all__ = [
     "VoiceActivityDetector",
-    "AutomaticSpeechRecognition", 
+    "AutomaticSpeechRecognition",
     "WordAligner",
     "PronunciationScorer",
     "GrammarCorrector",
     "FluencyAnalyzer",
+    "ConfidenceGrammarAnalyzer",
     "ConversationEngine",
     "TextToSpeech",
     "SpeekyPipeline",
