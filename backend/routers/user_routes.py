@@ -1,6 +1,5 @@
 from fastapi import APIRouter
 
-from middlewares.auth_middleware import require_auth
 from services.user_service import (
     get_profile,
     delete_account,

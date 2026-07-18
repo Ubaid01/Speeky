@@ -203,10 +203,25 @@ async def _score_confidence(user_id: str, new_session: SessionScore) -> float:
 
 # ── Controllers ───────────────────────────────────────────────────────────────
 async def start_assessment(user_id: str = Depends(require_auth)):
+    # Public baseline entry: refuse a second baseline once one is already completed —
+    # repeat runs must go through /reassessment/start so the 30-day cycle + early-retake
+    # cooldown apply. Re-assessment calls _begin_assessment directly to bypass this guard.
+    completed = await db.baselineassessment.count(
+        where={"userId": user_id, "completedAt": {"not": None}}
+    )
+    if completed:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Baseline already completed. Use re-assessment to retake."},
+        )
+    return await _begin_assessment(user_id)
+
+
+async def _begin_assessment(user_id: str):
     existing = await db.baselineassessment.find_first(where={"userId": user_id, "completedAt": None})
     if existing:
         return JSONResponse(status_code=400, content={"error": "Assessment already in progress."})
-    
+
     questions = _question_bank.get_assessment_questions(count=5)
 
     assessment = await db.baselineassessment.create(
@@ -249,7 +264,38 @@ async def submit_response(
             "flag_reason": flag_reason,
             "processing_success": False,
         }
+    elif payload.audio_features is not None:
+        # AUDIO pipeline — spoken answer scored via fluency + pronunciation.
+        from lib.session_scorer import AudioFeatures, score_audio_session
+
+        af = payload.audio_features
+        scored = score_audio_session(
+            AudioFeatures(
+                transcript=payload.text_data,
+                duration_seconds=af.duration_seconds,
+                word_timings=af.word_timings,
+                speech_rate=af.speech_rate,
+                pause_count=af.pause_count,
+                mean_pause_duration=af.mean_pause_duration,
+                filled_pauses=af.filled_pauses,
+                avg_db=af.avg_db,
+                pronunciation_score=af.pronunciation_score,
+            )
+        )
+        processing_result = {
+            "question_id": question_id,
+            "category": question.category if question else None,
+            "is_flagged": False,
+            "flag_reason": None,
+            "transcription": payload.text_data,
+            "fluency_score": scored.fluency_score,
+            "pronunciation_score": scored.pronunciation_score,
+            "vocabulary_score": scored.vocabulary_score,
+            "is_audio": True,
+            "processing_success": True,
+        }
     else:
+        # TEXT pipeline — typed answer, no audio signal (fluency/pronunciation unscored).
         processing_result = {
             "question_id": question_id,
             "category": question.category if question else None,
@@ -259,6 +305,7 @@ async def submit_response(
             "fluency_score": 0,
             "pronunciation_score": None,
             "vocabulary_score": _estimate_vocabulary_score(payload.text_data),
+            "is_audio": False,
             "processing_success": True,
         }
 
@@ -288,10 +335,21 @@ async def _complete_assessment(assessment: BaselineAssessment) -> Dict:
 
     vocabulary_scores = [r["vocabulary_score"] for r in successful]
     avg_vocabulary = round(sum(vocabulary_scores) / len(vocabulary_scores), 2) if vocabulary_scores else 0.0
-    # Text-only responses carry no audio signal, so fluency/pronunciation stay
-    # unscored here (see ScoringWeights normalization in confidence_engine.py).
-    avg_fluency = 0.0
-    avg_pronunciation = None
+
+    # Differentiate pipelines: if any answer came through the AUDIO pipeline, aggregate its
+    # fluency/pronunciation; a purely TEXT assessment carries no audio signal, so those stay
+    # unscored (see ScoringWeights normalization in confidence_engine.py).
+    audio_responses = [r for r in successful if r.get("is_audio")]
+    if audio_responses:
+        fluency_scores = [r["fluency_score"] for r in audio_responses]
+        avg_fluency = round(sum(fluency_scores) / len(fluency_scores), 2)
+        pron_scores = [r["pronunciation_score"] for r in audio_responses if r.get("pronunciation_score") is not None]
+        avg_pronunciation = round(sum(pron_scores) / len(pron_scores), 2) if pron_scores else None
+        is_text_only = False
+    else:
+        avg_fluency = 0.0
+        avg_pronunciation = None
+        is_text_only = True
 
     is_flagged, flag_reason = _integrity_checker.check_response_consistency(
         [r["transcription"] for r in successful if r.get("transcription")]
@@ -308,7 +366,7 @@ async def _complete_assessment(assessment: BaselineAssessment) -> Dict:
             fluency_score=avg_fluency,
             vocabulary_score=avg_vocabulary,
             pronunciation_score=avg_pronunciation,
-            is_text_only=True,
+            is_text_only=is_text_only,
             is_complete=True,
         ),
     )

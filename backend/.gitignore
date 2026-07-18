@@ -6,4 +6,9 @@ venv/
 .DS_Store
 speeky_pgdata/
 prisma/generated/
-uploads/
+uploads/*
+!uploads/avatars/
+uploads/avatars/*
+!uploads/avatars/user.webp
+data/tts/*.onnx
+data/tts/*.onnx.json

@@ -268,7 +268,12 @@ async def start_re_assessment(is_early: bool = False, user_id: str = Depends(req
 
     from services import assessment_service
 
-    result = await assessment_service.start_assessment(user_id)
+    # _begin_assessment, not start_assessment: eligibility/cooldown is already enforced
+    # above, and start_assessment's "baseline already completed" guard would reject every
+    # re-assessment (the user has, by definition, a completed baseline).
+    result = await assessment_service._begin_assessment(user_id)
+    if isinstance(result, JSONResponse):
+        return result
     result["is_re_assessment"] = True
     return result
 

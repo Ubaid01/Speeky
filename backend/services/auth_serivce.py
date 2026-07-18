@@ -2,13 +2,21 @@ import os
 from datetime import datetime, timezone
 
 import bcrypt
-from fastapi import Depends, Request, Response
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from lib.prisma_client import db
-from schemas.auth_schemas import ForgotSchema, LoginSchema, ResetSchema, SignupSchema
-from utils.email_utils import send_password_reset_email
+from schemas.auth_schemas import (
+    ForgotSchema,
+    LoginSchema,
+    ResendOtpSchema,
+    ResetSchema,
+    SignupSchema,
+    VerifyOtpSchema,
+)
+from services import otp_service
+from utils.email_utils import send_otp_email, send_password_reset_email
 from utils.jwt_utils import (
     get_access_cookie_options,
     get_refresh_cookie_options,
@@ -47,7 +55,8 @@ async def _issue_tokens(response: Response, user_id: str) -> None:
 
 
 # ── Controllers ───────────────────────────────────────────────────────────────
-async def signup(payload: SignupSchema, response: Response):
+async def signup(payload: SignupSchema):
+    # No user row yet — account is only created once the emailed OTP is verified.
     existing = await db.user.find_unique(where={"email": payload.email})
     if existing:
         return JSONResponse(status_code=409, content={"error": "Email already registered"})
@@ -55,13 +64,38 @@ async def signup(payload: SignupSchema, response: Response):
     hashed = await run_in_threadpool(
         lambda: bcrypt.hashpw(payload.password.encode(), bcrypt.gensalt(BCRYPT_COST)).decode()
     )
+    code = await otp_service.create_pending_signup(payload.email, payload.name, hashed)
+    await send_otp_email(payload.email, code)
+
+    return {"message": "A verification code has been sent to your email."}
+
+
+async def verify_signup_otp(payload: VerifyOtpSchema, response: Response):
+    pending = await otp_service.verify_pending_signup(payload.email, payload.code)
+    if not pending:
+        return JSONResponse(status_code=400, content={"error": "Invalid or expired verification code"})
+
+    # Re-check: pending signup may have gone stale if the account was created elsewhere meanwhile
+    existing = await db.user.find_unique(where={"email": payload.email})
+    if existing:
+        return JSONResponse(status_code=409, content={"error": "Email already registered"})
+
     user = await db.user.create(
-        data={"email": payload.email, "password": hashed, "name": payload.name}
+        data={"email": pending["email"], "password": pending["password"], "name": pending["name"]}
     )
+    await otp_service.clear_pending_signup(payload.email)
 
     await _issue_tokens(response, user.id)
     response.status_code = 201
     return {"user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role}}
+
+
+async def resend_signup_otp(payload: ResendOtpSchema):
+    # Always same response — don't reveal whether a signup is pending for this email
+    code = await otp_service.resend_code(payload.email)
+    if code:
+        await send_otp_email(payload.email, code)
+    return {"message": "If a signup is pending for that email, a new verification code has been sent."}
 
 
 async def login(payload: LoginSchema, response: Response):
@@ -120,7 +154,22 @@ async def logout(request: Request):
     if token:
         token_hash = hash_token(token)
         try:
+            stored = await db.refreshtoken.find_unique(where={"tokenHash": token_hash})
             await db.refreshtoken.update_many(where={"tokenHash": token_hash}, data={"revoked": True})
+            # Housekeeping: drop this user's dead refresh tokens (revoked — including
+            # the one just revoked above — or expired) so the table doesn't grow
+            # across repeated login/logout cycles. Other devices' still-active
+            # tokens are left intact (this is a single-device logout).
+            if stored:
+                await db.refreshtoken.delete_many(
+                    where={
+                        "userId": stored.userId,
+                        "OR": [
+                            {"revoked": True},
+                            {"expiresAt": {"lt": datetime.now(timezone.utc)}},
+                        ],
+                    }
+                )
         except Exception:
             pass
 

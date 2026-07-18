@@ -23,9 +23,14 @@ from middlewares.error_handler import (
     unhandled_exception_handler,
     validation_error_handler,
 )
-from routers.assessment_routes import router as assessment_router
 from routers.auth_routes import router as auth_router
 from routers.user_routes import router as user_router
+from routers.assessment_routes import router as assessment_router
+from routers.coaching_routes import router as coaching_router
+from routers.conversation_routes import router as conversation_router
+from routers.interview_coach_routes import router as interview_coach_router
+from routers.resume_jd_routes import router as resume_jd_router
+from routers.session_memory_routes import router as session_memory_router
 from utils.app_error import AppError
 
 
@@ -71,6 +76,11 @@ async def health():
 app.include_router(auth_router, prefix="/api/auth")
 app.include_router(user_router, prefix="/api/users")
 app.include_router(assessment_router, prefix="/api/assessment")
+app.include_router(coaching_router, prefix="/api/coaching")
+app.include_router(conversation_router, prefix="/api/conversation")
+app.include_router(interview_coach_router, prefix="/api/interview-coach")
+app.include_router(session_memory_router, prefix="/api/session-memory")
+app.include_router(resume_jd_router, prefix="/api/resume-jd-intake")
 
 # Local-folder avatar storage, exposed to frontend as static files
 _uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")

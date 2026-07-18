@@ -5,14 +5,18 @@ from services.auth_serivce import (
     login,
     logout,
     refresh,
+    resend_signup_otp,
     reset_password,
     signup,
+    verify_signup_otp,
 )
 
 router = APIRouter()
 
 # Public routes
 router.add_api_route("/signup", signup, methods=["POST"])
+router.add_api_route("/signup/verify-otp", verify_signup_otp, methods=["POST"])
+router.add_api_route("/signup/resend-otp", resend_signup_otp, methods=["POST"])
 router.add_api_route("/login", login, methods=["POST"])
 router.add_api_route("/refresh", refresh, methods=["POST"])
 router.add_api_route("/logout", logout, methods=["POST"])

@@ -100,5 +100,9 @@ def get_refresh_cookie_options() -> dict:
         secure=is_prod,
         samesite="none" if is_prod else "lax",
         max_age=_get_refresh_ttl_days() * 24 * 60 * 60,
-        path="/api/auth",
+        # path="/" (not "/api/auth"): require_auth on protected routes needs the
+        # refresh cookie to silently mint a new access token. Tradeoff — the
+        # refresh token is now sent on every request, so it's httponly (no JS
+        # read) and stays revocable server-side to limit the wider exposure.
+        path="/api/",
     )

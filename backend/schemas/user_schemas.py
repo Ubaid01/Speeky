@@ -1,6 +1,6 @@
 from typing import Literal, Optional
-
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from schemas.auth_schemas import _require_email_format
+from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
 
 
 class UpdateProfileSchema(BaseModel):
@@ -12,6 +12,8 @@ class UpdateProfileSchema(BaseModel):
         if self.name is None and self.email is None:
             raise ValueError("At least one of name or email must be provided")
         return self
+
+    _validate_gmail = field_validator("email")(_require_email_format)
 
 
 class UpdateRoleSchema(BaseModel):
