@@ -12,7 +12,6 @@ export interface ModalProps {
   description?: string;
   children: React.ReactNode;
   className?: string;
-  hideCloseButton?: boolean;
 }
 
 /**
@@ -99,8 +98,10 @@ export function Modal({
         aria-modal="true"
         aria-labelledby="modal-title"
         className={cn(
-          "relative flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-border bg-surface-elevated p-6 shadow-lg transition-all duration-200",
-          entered ? "translate-y-0 scale-100 opacity-100" : "translate-y-2 scale-95 opacity-0",
+          "relative w-full max-w-md rounded-2xl border border-border bg-surface-elevated p-6 shadow-lg transition-all duration-200",
+          entered
+            ? "translate-y-0 scale-100 opacity-100"
+            : "translate-y-2 scale-95 opacity-0",
           className,
         )}
       >
@@ -124,9 +125,13 @@ export function Modal({
           {title}
         </h2>
         {description ? (
-          <p className="mt-1 shrink-0 text-sm text-muted-foreground">{description}</p>
+          <p className="mt-1 shrink-0 text-sm text-muted-foreground">
+            {description}
+          </p>
         ) : null}
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">{children}</div>
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+          {children}
+        </div>
       </div>
     </div>,
     document.body,

@@ -133,7 +133,7 @@ model CustomScenario {
   openingLine   String?
   targetVocab   String[]
   goalType      String   @default("roleplay") // roleplay | negotiation
-  safetyMode    Boolean  @default(false)      // breaks character on a medical-emergency phrase
+  safetyMode    Boolean  @default(false) // breaks character on a medical-emergency phrase
   corporateTone Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
