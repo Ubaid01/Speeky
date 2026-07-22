@@ -11,7 +11,13 @@ __pycache__/
 *.zip
 Dockerfile*
 .dockerignore
+*.docx
 
 !.env.example
 !uploads/avatars/
 !uploads/avatars/user.webp
+
+output
+venv
+.claude
+.devin
