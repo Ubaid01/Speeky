@@ -63,6 +63,7 @@ _SLANG = {
 _AGGRESSIVE = [
     "you didn't", "you did not do your job", "you failed", "your fault", "you never",
     "you always", "incompetent", "unacceptable", "this is ridiculous", "what is wrong with you",
+    "idiot", "loser" , "stupid"
 ]
 _OVER_PROMISE = ["i guarantee", "100%", "i promise it will never", "whatever it takes",
                  "anything you want", "we'll do everything"]

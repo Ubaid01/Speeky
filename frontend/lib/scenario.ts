@@ -73,6 +73,37 @@ export function endScenarioSession(sessionId: string) {
   });
 }
 
+export interface ScenarioSessionState {
+  session_id: string;
+  scenario_key: string;
+  status: string;
+  turns: { role: string; content: string }[];
+  target_vocab: string[];
+  vocab_used: string[];
+  scores: { politeness: number | null; vocabulary: number | null; confidence: number | null };
+  met_goal: boolean | null;
+  summary: string | null;
+  completed_at: string | null;
+}
+
+// Used when a session ends on its own (silence auto-close, aggression, medical-emergency
+// break) instead of the learner clicking "End Scenario" — same GET the session page already
+// polls off of, just mapped into the same shape endScenarioSession() returns.
+export async function getScenarioSession(sessionId: string): Promise<ScenarioEndResult> {
+  const session = await api<ScenarioSessionState>(`/scenarios/sessions/${sessionId}`);
+  return {
+    session_id: session.session_id,
+    status: session.status,
+    scores: session.scores,
+    vocab_used: session.vocab_used,
+    vocab_missing: session.target_vocab.filter((w) => !session.vocab_used.includes(w)),
+    met_goal: session.met_goal,
+    summary: session.summary ?? "",
+    suggestion: "",
+    graded_by: "",
+  };
+}
+
 // ── Admin: custom scenario CRUD (SBL-US-06) ─────────────────────────────────
 export interface CustomScenario {
   id: string;
@@ -124,5 +155,29 @@ export function adminUpdateCustomScenario(id: string, data: CustomScenarioInput)
 export function adminDeleteCustomScenario(id: string) {
   return api<null>(`/scenarios/admin/custom/${id}`, {
     method: "DELETE",
+  });
+}
+
+// Sandbox tester (SBL-US-06 E-01) — try the current unsaved form values against the
+// AI before publishing. No DB row, no learner-facing effect.
+export interface ScenarioPreviewTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export function previewCustomScenario(data: {
+  persona: string;
+  system_prompt: string;
+  opening_line?: string;
+  target_vocab: string[];
+  goal_type: "roleplay" | "negotiation";
+  safety_mode: boolean;
+  corporate_tone: boolean;
+  turns: ScenarioPreviewTurn[];
+  message?: string;
+}) {
+  return api<{ reply: string; classification: string }>("/scenarios/admin/preview", {
+    method: "POST",
+    body: JSON.stringify(data),
   });
 }

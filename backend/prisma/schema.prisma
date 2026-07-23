@@ -34,8 +34,8 @@ enum PromptKind {
   REASSESSMENT
 }
 
-// Workplace English Coach scenarios
-// Just like in lib/prompts.WORKPLACE_SCENARIOS.
+// Workplace English Coach scenarios (WEC-US-08 .. WEC-US-12). Keys mirror
+// lib/prompts.WORKPLACE_SCENARIOS.
 enum CoachingScenario {
   EMAIL_WRITING // (text)
   CLIENT_COMMUNICATION // (audio roleplay)
@@ -100,11 +100,13 @@ model ScenarioSession {
   id          String   @id @default(cuid())
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  scenarioKey String
-  status      String   @default("in_progress") // in_progress | completed | ended_early
-  turns       Json     @default("[]") // [{role, content}]
-  targetVocab String[]
-  vocabUsed   String[] @default([])
+  scenarioKey    String
+  status         String @default("in_progress") // in_progress | completed | ended_early
+  turns          Json   @default("[]") // [{role, content}]
+  targetVocab    String[]
+  vocabUsed      String[] @default([])
+  silenceStreak    Int      @default(0) // consecutive silent/empty turns — 3 in a row auto-closes
+  aggressionStreak Int      @default(0) // consecutive aggressive/cursing turns — 2 in a row ends the scenario
 
   politenessScore Float?
   vocabularyScore Float?

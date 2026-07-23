@@ -1,25 +1,31 @@
-"""
-LiveKit worker: subscribes to a conversation room's mic track, runs Silero VAD to find
-speech boundaries, transcribes each utterance with faster-whisper (word-level timing),
-and posts the result to the backend's AIC-US-16 voice intake endpoint as an
-AudioFeaturesSchema turn — the contract conversation_service.py / session_scorer.py
-already expect.
+"""LiveKit worker for AI Conversation Practice's voice mode.
 
-Room naming convention: conversation_service._start_session sets room_name = session_id
-(session ids are already generated as "conv_<hex>" — see
-Speeky/backend/services/conversation_service.py). ctx.room.name IS the session_id, no
-transform needed on either side.
+Room-naming contract: the LiveKit room name IS the conversation session_id
+(see conversation_service._start_session: session["room_name"] = session_id,
+and livekit_tokens.mint_room_token(session["room_name"], ...) — the frontend
+joins that exact room with the token from POST /conversation/sessions/{id}/voice-token).
 
-Run: python agent.py dev   (needs its own venv — see requirements.txt; kept separate
-from the API server's deps since faster-whisper/silero pull in torch/ctranslate2).
+This worker auto-dispatches to every room a participant joins (default LiveKit
+agent dispatch — no per-session launch needed). For each subscribed audio track
+it runs Silero VAD to find speech segments, transcribes each segment locally
+with faster-whisper, and sends results over the room's LiveKit data channel:
+
+    topic="voice_transcript", payload={"text": "..."}   — final transcript
+    topic="voice_status",     payload={"status": "speaking"|"idle"}  — live state
+
+The frontend (see ConversationSessionPage's RoomEvent.DataReceived handler)
+appends transcript text into the message input box — the user reviews/edits it
+and hits Send, reusing the existing POST /conversation/sessions/{id}/messages
+path. The status packets drive a pulsing mic dot so the user sees when speech
+is being detected. This worker never calls the backend directly and never
+auto-sends on the user's behalf.
 """
 
 import asyncio
+import json
 import logging
-import os
-import wave
 
-import httpx
+import numpy as np
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from livekit import rtc
@@ -32,61 +38,41 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice-agent")
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
-INTERNAL_AGENT_SECRET = os.environ["INTERNAL_AGENT_SECRET"]
-
 model = WhisperModel("base", device="cpu", compute_type="int8")
 
 
-def save_wav(frames, filename="speech.wav"):
-    """Write every frame of the utterance, not just the first — a single VAD segment
-    spans many audio frames, and truncating to frames[0] means Whisper only ever sees
-    the first ~10-50ms of speech."""
-    first = frames[0]
-    with wave.open(filename, "wb") as wav:
-        wav.setnchannels(first.num_channels)
-        wav.setsampwidth(2)  # int16 = 2 bytes
-        wav.setframerate(first.sample_rate)
-        for frame in frames:
-            wav.writeframes(frame.data)
+def frames_to_float32(frames: list[rtc.AudioFrame]) -> np.ndarray:
+    """Concatenate VAD speech-segment frames (int16 PCM) into one float32 array."""
+    chunks = [np.frombuffer(f.data, dtype=np.int16) for f in frames]
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
 
 
-def transcribe_audio(filename="speech.wav"):
-    """Returns (transcript, word_timings) where word_timings matches
-    AudioFeaturesSchema.word_timings: [{"word", "start", "end"}, ...]."""
-    segments, _info = model.transcribe(filename, beam_size=5, word_timestamps=True)
-    text_parts = []
-    word_timings = []
-    for segment in segments:
-        text_parts.append(segment.text)
-        for w in segment.words or []:
-            word_timings.append({"word": w.word.strip(), "start": w.start, "end": w.end})
-    return " ".join(p.strip() for p in text_parts).strip(), word_timings
+def transcribe(audio: np.ndarray) -> str:
+    segments, _info = model.transcribe(audio, beam_size=5)
+    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
-async def send_transcript_to_backend(session_id: str, transcript: str, word_timings: list, duration_seconds: float):
-    payload = {
-        "input_mode": "audio",
-        "audio_features": {
-            "transcript": transcript,
-            "duration_seconds": duration_seconds,
-            "word_timings": word_timings,
-        },
-    }
-    url = f"{BACKEND_URL}/api/conversation/internal/sessions/{session_id}/agent-message"
+async def publish_transcript(room: rtc.Room, text: str) -> None:
+    if not text:
+        return
+    payload = json.dumps({"text": text}).encode("utf-8")
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload, headers={"X-Internal-Secret": INTERNAL_AGENT_SECRET})
-            resp.raise_for_status()
-            logger.info("Backend reply: %s", resp.json().get("reply"))
-    except httpx.HTTPError as e:
-        # Fire-and-forget per utterance — no retry loop; the next thing the user says
-        # is a fresh attempt, same as a dropped word in a live conversation.
-        logger.error("Failed to post transcript for session %s: %s", session_id, e)
+        await room.local_participant.publish_data(payload, reliable=True, topic="voice_transcript")
+        logger.info("Sent transcript to frontend: %r", text)
+    except Exception:
+        logger.exception("Failed to publish transcript over data channel")
 
 
-async def process_audio(track: rtc.Track, identity: str, vad: silero.VAD, session_id: str):
-    """Feed incoming audio frames into Silero VAD, transcribe each utterance, forward it."""
+async def publish_status(room: rtc.Room, status: str) -> None:
+    """Send a speaking/idle hint so the frontend can show a live mic indicator."""
+    payload = json.dumps({"status": status}).encode("utf-8")
+    try:
+        await room.local_participant.publish_data(payload, reliable=False, topic="voice_status")
+    except Exception:
+        pass  # best-effort — status hints are non-critical
+
+
+async def process_audio(track: rtc.Track, identity: str, vad: silero.VAD, room: rtc.Room):
     audio_stream = rtc.AudioStream(track)
     vad_stream = vad.stream()
 
@@ -99,40 +85,41 @@ async def process_audio(track: rtc.Track, identity: str, vad: silero.VAD, sessio
         async for event in vad_stream:
             if event.type == agents_vad.VADEventType.START_OF_SPEECH:
                 logger.info("Speech STARTED (%s)", identity)
+                await publish_status(room, "speaking")
             elif event.type == agents_vad.VADEventType.END_OF_SPEECH:
-                logger.info("Speech ENDED (%s) — %d frames", identity, len(event.frames))
-                save_wav(event.frames)
-
-                first, sample_rate = event.frames[0], event.frames[0].sample_rate
-                duration_seconds = sum(f.samples_per_channel for f in event.frames) / sample_rate
-
-                transcript, word_timings = transcribe_audio()
-                if not transcript.strip():
-                    logger.info("Empty transcript (likely noise) — skipping")
-                    continue
-
-                logger.info("Transcript: %s", transcript)
-                await send_transcript_to_backend(session_id, transcript, word_timings, duration_seconds)
+                await publish_status(room, "idle")
+                audio = frames_to_float32(event.frames)
+                text = transcribe(audio)
+                logger.info("Speech ENDED (%s): %r", identity, text)
+                await publish_transcript(room, text)
 
     await asyncio.gather(forward_frames(), read_vad_events())
 
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
-    session_id = ctx.room.name
-    logger.info("Agent connected to room: %s (session_id=%s)", ctx.room.name, session_id)
+    logger.info("Connected to room: %s", ctx.room.name)
 
-    logger.info("Loading Silero VAD model...")
     vad = silero.VAD.load()
-    logger.info("VAD model loaded.")
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant):
-        logger.info("Track subscribed: kind=%s from participant=%s", track.kind, participant.identity)
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(process_audio(track, participant.identity, vad, session_id))
+            logger.info("Subscribed to audio from %s", participant.identity)
+            asyncio.create_task(process_audio(track, participant.identity, vad, ctx.room))
 
-    await asyncio.Event().wait()  # keep the agent alive to keep listening
+    # Drain tracks that were already published before this worker joined.
+    # track_subscribed only fires for future subscriptions — without this loop
+    # any mic the browser published before the agent connected is silently missed.
+    for participant in ctx.room.remote_participants.values():
+        for publication in participant.track_publications.values():
+            if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                logger.info("Processing pre-existing audio from %s", participant.identity)
+                asyncio.create_task(
+                    process_audio(publication.track, participant.identity, vad, ctx.room)
+                )
+
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

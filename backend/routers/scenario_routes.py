@@ -4,6 +4,7 @@ from services.scenario_service import (
     admin_create_custom,
     admin_delete_custom,
     admin_list_custom,
+    admin_preview_custom,
     admin_update_custom,
     end_session,
     get_scenario_detail,
@@ -20,6 +21,7 @@ router.add_api_route("/", get_scenarios, methods=["GET"])
 router.add_api_route("/start", start_session, methods=["POST"])
 
 # Admin: custom scenario CRUD registered before "/{key}" so doesn't get swallowed by the catch-all path param.
+router.add_api_route("/admin/preview", admin_preview_custom, methods=["POST"])
 router.add_api_route("/admin/custom", admin_list_custom, methods=["GET"])
 router.add_api_route("/admin/custom", admin_create_custom, methods=["POST"])
 router.add_api_route("/admin/custom/{scenario_id}", admin_update_custom, methods=["PATCH"])
