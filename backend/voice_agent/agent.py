@@ -24,6 +24,7 @@ auto-sends on the user's behalf.
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from dotenv import load_dotenv
@@ -40,6 +41,13 @@ logger = logging.getLogger("voice-agent")
 
 model = WhisperModel("base", device="cpu", compute_type="int8")
 
+# model.transcribe() is synchronous/CPU-bound; run it off the event loop so it never
+# blocks the agent's WebRTC keepalives (a blocked loop for the several seconds
+# transcription takes was tipping the LiveKit connection into a client-initiated
+# disconnect mid-session). max_workers=1 also serializes calls onto one shared model
+# instance, which isn't guaranteed safe for concurrent inference.
+_executor = ThreadPoolExecutor(max_workers=1)
+
 
 def frames_to_float32(frames: list[rtc.AudioFrame]) -> np.ndarray:
     """Concatenate VAD speech-segment frames (int16 PCM) into one float32 array."""
@@ -48,7 +56,11 @@ def frames_to_float32(frames: list[rtc.AudioFrame]) -> np.ndarray:
 
 
 def transcribe(audio: np.ndarray) -> str:
-    segments, _info = model.transcribe(audio, beam_size=5)
+    # temperature=0: single decode pass. faster-whisper's default temperature-fallback
+    # ladder retries up to 6x on low-confidence audio, turning one utterance into a
+    # 7-10s+ block — the user reviews/edits the transcript before sending anyway, so a
+    # rougher single-pass result beats a more "accurate" one that misses the latency budget.
+    segments, _info = model.transcribe(audio, beam_size=5, temperature=0)
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
@@ -89,7 +101,7 @@ async def process_audio(track: rtc.Track, identity: str, vad: silero.VAD, room: 
             elif event.type == agents_vad.VADEventType.END_OF_SPEECH:
                 await publish_status(room, "idle")
                 audio = frames_to_float32(event.frames)
-                text = transcribe(audio)
+                text = await asyncio.get_running_loop().run_in_executor(_executor, transcribe, audio)
                 logger.info("Speech ENDED (%s): %r", identity, text)
                 await publish_transcript(room, text)
 

@@ -22,13 +22,7 @@ import {
 } from "@/lib/conversation";
 import { playText } from "@/lib/tts";
 import { useAutoScroll } from "@/lib/useAutoScroll";
-import {
-  Room,
-  RoomEvent,
-  Track,
-  createLocalAudioTrack,
-  type LocalAudioTrack,
-} from "livekit-client";
+import { useLiveKitVoice } from "@/lib/useLiveKitVoice";
 
 export default function ConversationSessionPage() {
   const params = useParams<{ sessionId: string }>();
@@ -44,15 +38,29 @@ export default function ConversationSessionPage() {
   const [summary, setSummary] = React.useState<EndConversationResult | null>(
     null,
   );
-  const [isVoiceActive, setIsVoiceActive] = React.useState(false);
-  const [isConnectingVoice, setIsConnectingVoice] = React.useState(false);
-  const [voiceStatus, setVoiceStatus] = React.useState("");
 
   const scrollRef = useAutoScroll(turns?.length ?? 0);
   const lastAutoPlayed = React.useRef(-1);
   const audioModeWasOn = React.useRef(false);
-  const roomRef = React.useRef<Room | null>(null);
-  const microphoneTrackRef = React.useRef<LocalAudioTrack | null>(null);
+
+  // voice_agent transcribes speech and sends it back over the LiveKit data channel
+  // (topic "voice_transcript") instead of auto-sending — fills the input box so the
+  // user can review/edit before hitting Send.
+  const fetchVoiceToken = React.useCallback(
+    () => getConversationVoiceToken(params.sessionId),
+    [params.sessionId],
+  );
+  const onTranscript = React.useCallback((text: string) => {
+    setMessage((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+  }, []);
+  const {
+    isVoiceActive,
+    isConnectingVoice,
+    voiceStatus,
+    error: voiceError,
+    startVoice,
+    stopVoice,
+  } = useLiveKitVoice(fetchVoiceToken, onTranscript);
 
   React.useEffect(() => {
     getConversationTranscript(params.sessionId)
@@ -108,105 +116,19 @@ export default function ConversationSessionPage() {
     }
   }, [audioMode, turns, handlePlay]);
 
+  React.useEffect(() => {
+    if (voiceError) setError(voiceError);
+  }, [voiceError]);
+
   async function handleStartVoice() {
-    if (isVoiceActive || isConnectingVoice) return;
-
     setError(null);
-    setIsConnectingVoice(true);
-    setVoiceStatus("Connecting voice...");
-
-    try {
-      const voiceData = await getConversationVoiceToken(params.sessionId);
-      const room = new Room();
-
-      room.on(RoomEvent.Disconnected, () => {
-        setIsVoiceActive(false);
-        setVoiceStatus("Voice disconnected.");
-      });
-
-      // voice_agent transcribes speech and sends it back over this data channel
-      // (topic "voice_transcript") instead of auto-sending — fills the input box
-      // so the user can review/edit before hitting Send.
-      room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
-        if (topic !== "voice_transcript") return;
-        try {
-          const { text } = JSON.parse(new TextDecoder().decode(payload));
-          if (!text) return;
-          setMessage((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
-          setVoiceStatus("Heard you — review and hit Send.");
-        } catch (err) {
-          console.error("Failed to parse voice transcript payload:", err);
-        }
-      });
-
-      await room.connect(voiceData.url, voiceData.token);
-
-      const microphoneTrack = await createLocalAudioTrack();
-      await room.localParticipant.publishTrack(microphoneTrack, {
-        source: Track.Source.Microphone,
-      });
-
-      roomRef.current = room;
-      microphoneTrackRef.current = microphoneTrack;
-
-      setIsVoiceActive(true);
-      setVoiceStatus("Voice connected. Microphone is active.");
-    } catch (err) {
-      console.error("Failed to start voice:", err);
-
-      microphoneTrackRef.current?.stop();
-      microphoneTrackRef.current = null;
-
-      if (roomRef.current) {
-        await roomRef.current.disconnect();
-        roomRef.current = null;
-      }
-
-      setIsVoiceActive(false);
-      setVoiceStatus("Could not start voice.");
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : "Couldn't connect to voice mode. Check microphone permission and try again.",
-      );
-    } finally {
-      setIsConnectingVoice(false);
-    }
+    await startVoice();
   }
 
   async function handleStopVoice() {
-    setVoiceStatus("Stopping voice...");
-
-    try {
-      if (microphoneTrackRef.current) {
-        microphoneTrackRef.current.stop();
-        microphoneTrackRef.current = null;
-      }
-
-      if (roomRef.current) {
-        await roomRef.current.disconnect();
-        roomRef.current = null;
-      }
-    } finally {
-      setIsVoiceActive(false);
-      setVoiceStatus("Voice stopped.");
-      await refreshTranscript();
-    }
+    await stopVoice();
+    await refreshTranscript();
   }
-
-  React.useEffect(() => {
-    return () => {
-      microphoneTrackRef.current?.stop();
-      microphoneTrackRef.current = null;
-
-      const room = roomRef.current;
-      roomRef.current = null;
-
-      if (room) {
-        void room.disconnect();
-      }
-    };
-  }, []);
 
   async function handleSend() {
     if (!message.trim() || isSending) return;

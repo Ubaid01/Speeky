@@ -29,7 +29,7 @@ from fastapi import Depends, Response
 from fastapi.responses import JSONResponse
 from prisma import Json
 
-from lib import llm_client, prompts
+from lib import livekit_tokens, llm_client, prompts
 from lib.prisma_client import db
 from middlewares.auth_middleware import require_admin, require_auth
 from schemas.scenario_schemas import (
@@ -277,6 +277,21 @@ async def _require_access(user_id: str) -> Optional[JSONResponse]:
 
 async def get_scenarios(user_id: str = Depends(require_auth)):
     return {"scenarios": await list_scenarios()}
+
+
+# ── Voice mode: LiveKit room token (mirrors conversation_service._voice_token) ─
+async def voice_token(session_id: str, user_id: str = Depends(require_auth)):
+    gate = await _require_access(user_id)
+    if gate:
+        return gate
+    session = await db.scenariosession.find_unique(where={"id": session_id})
+    if not session or session.userId != user_id:
+        return JSONResponse(status_code=404, content={"error": "Scenario session not found"})
+    if not livekit_tokens.is_configured():
+        return JSONResponse(status_code=503, content={
+            "error": "Voice mode unavailable. Use text mode instead.",
+        })
+    return livekit_tokens.mint_room_token(session_id, identity=user_id)
 
 
 async def get_scenario_detail(key: str, user_id: str = Depends(require_auth)):

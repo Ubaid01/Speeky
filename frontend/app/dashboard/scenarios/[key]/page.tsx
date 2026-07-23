@@ -6,6 +6,8 @@ import {
   CheckCircle2,
   Headphones,
   Lock,
+  Mic,
+  MicOff,
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
@@ -15,6 +17,7 @@ import {
   endScenarioSession,
   getScenarioDetail,
   getScenarioSession,
+  getScenarioVoiceToken,
   sendScenarioTurn,
   startScenarioSession,
   type ScenarioDetail,
@@ -23,6 +26,7 @@ import {
 } from "@/lib/scenario";
 import { useAutoScroll } from "@/lib/useAutoScroll";
 import { useAutoSpeak } from "@/lib/useAutoSpeak";
+import { useLiveKitVoice } from "@/lib/useLiveKitVoice";
 
 interface ChatTurn {
   role: "assistant" | "user";
@@ -57,6 +61,32 @@ export default function ScenarioSessionPage() {
   const chatTurns = step.name === "chat" ? step.turns : null;
   const scrollRef = useAutoScroll(chatTurns?.length ?? 0);
   useAutoSpeak(audioMode, chatTurns);
+
+  // Voice mode: same LiveKit mic-in pattern as Conversation — transcript fills the
+  // chat input for the user to review/edit, never auto-sent. sessionIdRef tracks the
+  // active session id since the hook must be called unconditionally at top level.
+  const sessionIdRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (step.name === "chat") sessionIdRef.current = step.session.session_id;
+  }, [step]);
+  const fetchVoiceToken = React.useCallback(() => {
+    if (!sessionIdRef.current) return Promise.reject(new Error("No active scenario session"));
+    return getScenarioVoiceToken(sessionIdRef.current);
+  }, []);
+  const onTranscript = React.useCallback((text: string) => {
+    setChatInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+  }, []);
+  const {
+    isVoiceActive,
+    isConnectingVoice,
+    voiceStatus,
+    error: voiceError,
+    startVoice,
+    stopVoice,
+  } = useLiveKitVoice(fetchVoiceToken, onTranscript);
+  React.useEffect(() => {
+    if (voiceError) setError(voiceError);
+  }, [voiceError]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -159,6 +189,7 @@ export default function ScenarioSessionPage() {
 
   async function handleEnd() {
     if (step.name !== "chat") return;
+    if (isVoiceActive) await stopVoice();
     setError(null);
     setIsSubmitting(true);
     try {
@@ -339,7 +370,28 @@ export default function ScenarioSessionPage() {
             >
               Send
             </Button>
+            {isVoiceActive ? (
+              <Button size="md" variant="outline" onClick={() => void stopVoice()}>
+                <MicOff className="h-4 w-4" aria-hidden="true" />
+                Stop Voice
+              </Button>
+            ) : (
+              <Button
+                size="md"
+                variant="outline"
+                loading={isConnectingVoice}
+                onClick={() => void startVoice()}
+              >
+                <Mic className="h-4 w-4" aria-hidden="true" />
+                Start Voice
+              </Button>
+            )}
           </div>
+          {voiceStatus ? (
+            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+              {voiceStatus}
+            </p>
+          ) : null}
           {error ? <p className="text-sm text-danger">{error}</p> : null}
         </div>
       </div>

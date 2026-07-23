@@ -1,4 +1,5 @@
 import { api } from "./api";
+import type { VoiceTokenResult } from "./useLiveKitVoice";
 
 export interface ScenarioListItem {
   key: string;
@@ -57,6 +58,12 @@ export function startScenarioSession(scenarioKey: string) {
   return api<StartScenarioResult>("/scenarios/start", {
     method: "POST",
     body: JSON.stringify({ scenario_key: scenarioKey }),
+  });
+}
+
+export function getScenarioVoiceToken(sessionId: string) {
+  return api<VoiceTokenResult>(`/scenarios/${sessionId}/voice-token`, {
+    method: "POST",
   });
 }
 

@@ -12,6 +12,7 @@ from services.scenario_service import (
     get_session,
     send_turn,
     start_session,
+    voice_token,
 )
 
 router = APIRouter()
@@ -28,6 +29,7 @@ router.add_api_route("/admin/custom/{scenario_id}", admin_update_custom, methods
 router.add_api_route("/admin/custom/{scenario_id}", admin_delete_custom, methods=["DELETE"])
 
 router.add_api_route("/{session_id}/turn", send_turn, methods=["POST"])
+router.add_api_route("/{session_id}/voice-token", voice_token, methods=["POST"])
 router.add_api_route("/{session_id}/end", end_session, methods=["POST"])
 router.add_api_route("/{key}", get_scenario_detail, methods=["GET"])
 router.add_api_route("/sessions/{session_id}", get_session, methods=["GET"])
