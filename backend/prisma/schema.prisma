@@ -66,6 +66,18 @@ enum AccentAssessmentStatus {
   REJECTED_MULTIPLE_VOICES
 }
 
+// Public Speaking Coach speech types (PSC-US-01, PSC-US-03, PSC-US-04, PSC-US-05, PSC-US-06, PSC-US-07)
+// Using String instead of enum for flexibility
+// Values: business_pitch, casual_event, motivational, classroom, ted_talk
+
+// Public Speaking Coach input modes
+// Using String instead of enum for flexibility
+// Values: audio, text
+
+// Public Speaking Coach session status
+// Using String instead of enum for flexibility
+// Values: in_progress, completed, qa_phase
+
 model User {
   id                    String                 @id @default(cuid())
   email                 String                 @unique
@@ -87,6 +99,7 @@ model User {
   accentAssessments     AccentAssessment[]
   pronunciationAttempts PronunciationAttempt[]
   accentProfiles        AccentProfile[]
+  publicSpeakingSessions PublicSpeakingSession[]
 
   @@map("users")
 }
@@ -356,4 +369,25 @@ model SignupOtp {
   createdAt DateTime @default(now())
 
   @@map("signup_otps")
+}
+
+// Public Speaking Coach session (PSC-US-01, PSC-US-03, PSC-US-04, PSC-US-05, PSC-US-06, PSC-US-07, PSC-US-11, PSC-US-12, PSC-US-14)
+model PublicSpeakingSession {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  speechType      String   // business_pitch, casual_event, motivational, classroom, ted_talk
+  inputMode       String   // audio, text
+  status          String   @default("in_progress") // in_progress, completed, qa_phase
+  topic           String?
+  transcript      String?
+  scorecard       Json?
+  aiQuestion      String?  // AI-generated Q&A question (PSC-US-12)
+  userQaResponse  String?  // User's Q&A response
+  qaScore         Json?    // Q&A performance evaluation
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([userId, completedAt])
+  @@map("public_speaking_sessions")
 }
