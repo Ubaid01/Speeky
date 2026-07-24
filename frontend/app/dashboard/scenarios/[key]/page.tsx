@@ -24,6 +24,7 @@ import {
   type ScenarioEndResult,
   type StartScenarioResult,
 } from "@/lib/scenario";
+import { getPersonalizedOpening } from "@/lib/sessionMemory";
 import { useAutoScroll } from "@/lib/useAutoScroll";
 import { useAutoSpeak } from "@/lib/useAutoSpeak";
 import { useLiveKitVoice } from "@/lib/useLiveKitVoice";
@@ -58,6 +59,7 @@ export default function ScenarioSessionPage() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [audioMode, setAudioMode] = React.useState(false);
+  const [greeting, setGreeting] = React.useState<string | null>(null);
   const chatTurns = step.name === "chat" ? step.turns : null;
   const scrollRef = useAutoScroll(chatTurns?.length ?? 0);
   useAutoSpeak(audioMode, chatTurns);
@@ -79,6 +81,7 @@ export default function ScenarioSessionPage() {
   const {
     isVoiceActive,
     isConnectingVoice,
+    isStoppingVoice,
     voiceStatus,
     error: voiceError,
     startVoice,
@@ -87,6 +90,16 @@ export default function ScenarioSessionPage() {
   React.useEffect(() => {
     if (voiceError) setError(voiceError);
   }, [voiceError]);
+
+  React.useEffect(() => {
+    // Same shared cross-session memory profile Interview Coach's setup page reads from
+    // (app/dashboard/interview-coach/page.tsx) — best-effort, silently skipped if it fails.
+    getPersonalizedOpening()
+      .then((data) => {
+        if (data.has_history) setGreeting(data.opening_message);
+      })
+      .catch(() => {});
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -249,6 +262,12 @@ export default function ScenarioSessionPage() {
             Roleplay persona: {detail.persona}
           </p>
         </div>
+        {greeting ? (
+          <div className="flex items-start gap-2.5 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            {greeting}
+          </div>
+        ) : null}
         <div className="rounded-2xl border border-border bg-surface-elevated p-6 shadow-sm">
           <p className="text-sm text-foreground">{detail.intent}</p>
           <div className="mt-5">
@@ -371,7 +390,12 @@ export default function ScenarioSessionPage() {
               Send
             </Button>
             {isVoiceActive ? (
-              <Button size="md" variant="outline" onClick={() => void stopVoice()}>
+              <Button
+                size="md"
+                variant="outline"
+                loading={isStoppingVoice}
+                onClick={() => void stopVoice()}
+              >
                 <MicOff className="h-4 w-4" aria-hidden="true" />
                 Stop Voice
               </Button>
@@ -482,12 +506,45 @@ export default function ScenarioSessionPage() {
             </span>
           ))}
         </div>
-        {result.suggestion ? (
-          <p className="mt-4 text-sm text-muted-foreground">
-            {result.suggestion}
-          </p>
-        ) : null}
       </div>
+
+      {result.tips.length > 0 || result.suggestion ? (
+        <div
+          className="animate-fade-up rounded-2xl border border-border bg-surface-elevated p-6 shadow-sm"
+          style={{ animationDelay: "260ms" }}
+        >
+          <h2 className="font-serif text-lg font-semibold text-foreground">
+            Tips for Next Time
+          </h2>
+          <ul className="mt-3 flex flex-col gap-2">
+            {(result.tips.length > 0 ? result.tips : [result.suggestion]).map((tip, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                {tip}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {result.polished_line ? (
+        <div
+          className="animate-fade-up rounded-2xl border border-border bg-surface-elevated p-6 shadow-sm"
+          style={{ animationDelay: "320ms" }}
+        >
+          <h2 className="font-serif text-lg font-semibold text-foreground">
+            A Stronger Way to Say It
+          </h2>
+          {result.original_line ? (
+            <p className="mt-3 text-sm text-muted-foreground line-through decoration-danger/40">
+              {result.original_line}
+            </p>
+          ) : null}
+          <p className="mt-2 rounded-xl bg-success/10 px-4 py-3 text-sm text-foreground">
+            {result.polished_line}
+          </p>
+        </div>
+      ) : null}
 
       <Button
         size="lg"

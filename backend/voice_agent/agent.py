@@ -22,11 +22,11 @@ auto-sends on the user's behalf.
 """
 
 import asyncio
+import io
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from livekit import rtc
@@ -49,18 +49,15 @@ model = WhisperModel("base", device="cpu", compute_type="int8")
 _executor = ThreadPoolExecutor(max_workers=1)
 
 
-def frames_to_float32(frames: list[rtc.AudioFrame]) -> np.ndarray:
-    """Concatenate VAD speech-segment frames (int16 PCM) into one float32 array."""
-    chunks = [np.frombuffer(f.data, dtype=np.int16) for f in frames]
-    return np.concatenate(chunks).astype(np.float32) / 32768.0
-
-
-def transcribe(audio: np.ndarray) -> str:
+def transcribe(frame: rtc.AudioFrame) -> str:
+    # Hand faster-whisper a WAV file-like object (via to_wav_bytes(), which correctly tags the frame's real sample rate .
+    # Silero's VAD event frame is at the track's native rate, e.g. 48kHz, NOT the 16kHz Silero resamples to internally for its own inference) instead of a raw ndarray.
+    wav_bytes = frame.to_wav_bytes()
     # temperature=0: single decode pass. faster-whisper's default temperature-fallback
     # ladder retries up to 6x on low-confidence audio, turning one utterance into a
     # 7-10s+ block — the user reviews/edits the transcript before sending anyway, so a
     # rougher single-pass result beats a more "accurate" one that misses the latency budget.
-    segments, _info = model.transcribe(audio, beam_size=5, temperature=0)
+    segments, _info = model.transcribe(io.BytesIO(wav_bytes), beam_size=5, temperature=0)
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
@@ -100,8 +97,12 @@ async def process_audio(track: rtc.Track, identity: str, vad: silero.VAD, room: 
                 await publish_status(room, "speaking")
             elif event.type == agents_vad.VADEventType.END_OF_SPEECH:
                 await publish_status(room, "idle")
-                audio = frames_to_float32(event.frames)
-                text = await asyncio.get_running_loop().run_in_executor(_executor, transcribe, audio)
+                # Silero's END_OF_SPEECH event carries the whole utterance as a single
+                # already-combined frame (see livekit/plugins/silero/vad.py's
+                # _copy_speech_buffer) — no need to concatenate multiple frames.
+                text = await asyncio.get_running_loop().run_in_executor(
+                    _executor, transcribe, event.frames[0]
+                )
                 logger.info("Speech ENDED (%s): %r", identity, text)
                 await publish_transcript(room, text)
 
